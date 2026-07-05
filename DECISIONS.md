@@ -51,6 +51,12 @@ whether the key was committed by a concurrent/previous attempt: same body -> rep
 response; different body -> 409. Request hash = SHA-256 of the JSON body (assumes clients send
 identical bodies for retries — reasonable for machine-generated retries).
 
+**Refined (phase 6):** the request hash is canonical — `{ params, body }` serialized with
+recursively sorted keys — computed identically by the interceptor (from the raw request) and by
+the services (from route args + DTO). The e2e suite caught the original bug: the two sides hashed
+different shapes, so an honest HTTP retry was misclassified as key reuse (409 instead of replay).
+Key ordering must never affect idempotency decisions.
+
 ## 5. Reconciliation / ordering
 
 Decision: monotonic `version` per program; apply snapshot/delta only if `version > applied_version`,
@@ -71,10 +77,24 @@ If the broker is unreachable at boot in local dev, the HTTP API stays up and ing
 
 ## 6. Multi-currency
 
-Decision: <choose> (a) reject reservations whose currency != program base currency, OR
-(b) convert at reservation time and persist the FX rate + timestamp on the ledger row.
-Trade-off: (a) is simplest and avoids FX-rounding disputes; (b) is more realistic but needs a rate
-source and a defined rounding rule (round half-up on the converted minor units). RECORD which you chose.
+Decision: (b) convert at reservation time and persist the FX rate + timestamp on the ledger row.
+Trade-off: (a) reject-on-mismatch is simplest and avoids FX-rounding disputes; (b) is more realistic
+but needs a rate source and a defined rounding rule. We chose (b) because the task states invoices
+MAY differ from the program currency — rejecting would fail the stated requirement.
+
+**Implemented (phase 5):**
+- `fx_rates` table seeded by migration with USD/EUR/GBP cross rates. A live rate feed is out of
+  scope; the mechanics (persisted rate + `as_of` timestamp, deterministic rounding) are what matter.
+  Unknown pairs are rejected: HTTP `422`, Kafka -> DLQ (an unknown pair can never succeed, so it is
+  poison, not transient).
+- Conversion is pure bigint math (`convertMinorUnits`): the rate is scaled to 8 decimals, multiply,
+  then **round half-up** on the converted minor units. No floats anywhere in the path.
+- The reservation stores `amount`+`currency` (original), `amount_base` (converted), `fx_rate`, and
+  `fx_rate_as_of`. Release returns EXACTLY `amount_base` — the rate is read once at reservation
+  time, so later rate changes cannot leak or strand capacity (no FX drift).
+- Treasury deltas in a non-base currency convert the same way with the same persisted evidence.
+  Snapshots must be in the program base currency (a base-currency change is a different, rarer
+  operation that deserves an explicit migration path, not a snapshot side effect).
 
 ## 7. Authentication
 
@@ -84,6 +104,10 @@ Trade-off: fine for a local PoC; production would use asymmetric keys / an IdP.
 **Implemented (scaffold):** `AuthModule` registers `JwtAuthGuard` via `APP_GUARD`. `JwtStrategy`
 validates signature, expiry, issuer, and audience. `GET /health` is `@Public()`. Dev tokens via
 `npm run token:dev` (reads `JWT_*` from `.env`). Authorization header is redacted in request logs.
+
+**Not implemented (intentional):** refresh tokens / `POST /auth/refresh`. Production would use
+OAuth2/OIDC (Auth0, Keycloak) or a refresh-token rotation endpoint; the UI calls refresh on 401
+(expiry only) and redirects to login on refresh failure. See `docs/STARTUP.md` §5.
 
 ## 8. Snapshot vs ledger reconciliation
 

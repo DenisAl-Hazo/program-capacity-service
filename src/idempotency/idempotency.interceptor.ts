@@ -32,7 +32,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
       );
     }
 
-    const requestHash = this.idempotencyService.computeRequestHash(request.body);
+    const requestHash = this.idempotencyService.computeRequestHash({
+      params: request.params,
+      body: request.body,
+    });
     const existing = await this.idempotencyService.findByKey(key);
     if (existing) {
       this.idempotencyService.assertSameRequest(existing, requestHash);

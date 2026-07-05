@@ -18,7 +18,8 @@ export class ProgramsService {
 
   async create(dto: CreateProgramDto, idempotencyKey: string): Promise<ProgramResponse> {
     const totalLimit = Money.fromString(dto.totalLimit, dto.baseCurrency);
-    const requestHash = this.idempotency.computeRequestHash(dto);
+    // Must mirror IdempotencyInterceptor: route params (none) + body.
+    const requestHash = this.idempotency.computeRequestHash({ params: {}, body: dto });
 
     try {
       return await this.dataSource.transaction(async (manager) => {

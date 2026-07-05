@@ -5,6 +5,21 @@ import { DataSource, EntityManager } from 'typeorm';
 import { IdempotencyConflictError } from '../common/errors/domain-error';
 import { IdempotencyKey } from './idempotency-key.entity';
 
+/** JSON.stringify with recursively sorted object keys — deterministic across sources. */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`);
+    return `{${entries.join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
 interface SaveResultParams {
   key: string;
   requestHash: string;
@@ -21,9 +36,15 @@ interface SaveResultParams {
 export class IdempotencyService {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
-  computeRequestHash(body: unknown): string {
+  /**
+   * Canonical request identity = route params + body, serialized with sorted keys so
+   * property order (raw JSON vs transformed DTO) can never change the hash. The
+   * interceptor and the services MUST build the input the same way, otherwise a
+   * legitimate retry is misclassified as a key-reuse conflict.
+   */
+  computeRequestHash(input: { params: Record<string, string | string[]>; body: unknown }): string {
     return createHash('sha256')
-      .update(JSON.stringify(body ?? {}))
+      .update(stableStringify({ params: input.params, body: input.body ?? {} }))
       .digest('hex');
   }
 

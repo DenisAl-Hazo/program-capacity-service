@@ -7,20 +7,41 @@ different currencies. All endpoints are authenticated. Runs locally via Docker C
 
 Package: `program-capacity-service` · handle: `pcs`
 
-## Stack
-NestJS + TypeScript (strict) · PostgreSQL via TypeORM · Kafka (kafkajs) · Jest + Testcontainers ·
-Docker + Docker Compose. Single `dev` branch, Conventional Commits (Husky + commitlint), no CI/CD.
+## Tech stack — what and why
+
+| Instrument | Role | Why this one |
+|---|---|---|
+| **NestJS** (strict TypeScript) | HTTP framework, DI container | Modular architecture (guards, pipes, interceptors, filters, middleware) maps 1:1 onto the cross-cutting concerns this service needs: auth, validation, idempotency, error mapping, correlation ids |
+| **PostgreSQL 16** | System of record | ACID transactions carry the core invariant: the capacity check and the ledger write commit atomically or not at all. CHECK constraints, unique indexes and a trigger enforce the rules even against buggy app code |
+| **TypeORM** | Entities + migrations | Schema is versioned in `src/database/migrations/` (`synchronize` is off everywhere); raw SQL is used deliberately where precision matters (atomic conditional UPDATE, `ON CONFLICT` dedupe) |
+| **Kafka** (`kafkajs`, dedicated consumer) | Treasury ingestion | A hand-rolled consumer (not `@nestjs/microservices`) so offsets are committed manually **after** the DB transaction — at-least-once delivery + idempotent processor = effectively-once application |
+| **Passport + JWT** | AuthN | Global `JwtAuthGuard` via `APP_GUARD`; `@Public()` opt-out for `/health`. Validates signature, expiry, issuer, audience |
+| **Joi** (`@nestjs/config`) | Config validation | The app fails fast at boot on missing/invalid env vars instead of failing at 3am on the first request |
+| **nestjs-pino** | Structured logging | JSON logs with a correlation id per request; `Authorization` header redacted |
+| **Jest + Testcontainers** | Tests | Unit tests for money/FX math; integration tests against **real Postgres** (the concurrency test is the whole point); e2e over HTTP with Supertest |
+| **Docker Compose** | Local runtime | One command brings up Postgres, Kafka (KRaft, no ZooKeeper), Kafka UI, and the app |
+| **Husky + commitlint** | Git hygiene | Conventional Commits enforced on a single `dev` branch |
+
+### NestJS building blocks used (where to look)
+
+- **Middleware** — `CorrelationIdMiddleware` (`src/common/middleware/`): correlation id per request.
+- **Guard** — `JwtAuthGuard` (`src/auth/`): global auth, `@Public()` opt-out.
+- **Pipes** — global `ValidationPipe` (whitelist + forbidNonWhitelisted) + `ParseUUIDPipe` on params.
+- **Interceptor** — `IdempotencyInterceptor` (`src/idempotency/`): enforces the `Idempotency-Key` header and replays stored responses.
+- **Exception filter** — `GlobalExceptionFilter` (`src/common/filters/`): domain errors → HTTP codes, internals never leak.
+- **Custom decorators** — `@Public()`, `@IdempotencyKeyParam()`.
 
 ## Quick start
 
 ```bash
 cp .env.example .env
 npm install
-docker compose up -d          # Postgres + Kafka (+ app)
-npm run start:dev             # local dev against compose infra
+docker compose up -d postgres kafka kafka-ui   # infra only
+npm run migration:run
+npm run start:dev                              # app on http://localhost:3000
 ```
 
-Or run everything in Docker:
+Or run everything (app included) in Docker:
 
 ```bash
 cp .env.example .env
@@ -28,75 +49,120 @@ docker compose up --build
 ```
 
 Health (no auth): `GET http://localhost:3000/health`
+Kafka UI (topics, messages, consumer lag): http://localhost:8080
 
 ## Authentication
 
-Every route is protected by a global JWT guard. Opt out per-route with `@Public()` (used by `/health`).
-
-1. Ensure `.env` contains `JWT_SECRET`, `JWT_ISSUER`, and `JWT_AUDIENCE` (see `.env.example`).
-2. Generate a dev token:
+Every route except `/health` requires a bearer token.
 
 ```bash
-npm run token:dev
-# optional subject: npm run token:dev -- my-service-account
+TOKEN=$(npm run token:dev --silent)      # signs a JWT with JWT_* from .env
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/programs/<id>/availability
 ```
 
-3. Call protected endpoints with the bearer token:
+Invalid/missing tokens receive `401`. See DECISIONS.md §7 for the trade-off (HS256 local vs IdP in prod).
+
+## API walkthrough
+
+All mutations require an `Idempotency-Key` header (any unique string ≤ 255 chars; retries must
+resend the same key + body). Amounts are **strings of integer minor units** (cents), never JSON numbers.
 
 ```bash
 TOKEN=$(npm run token:dev --silent)
-curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/some-future-route
+AUTH="Authorization: Bearer $TOKEN"
+
+# 1. Create a program with 1,000,000 USD-cents ($10,000) of capacity
+curl -s -X POST http://localhost:3000/programs \
+  -H "$AUTH" -H "Content-Type: application/json" -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"name":"acme-q3","totalLimit":"1000000","baseCurrency":"USD"}'
+# -> { "programId": "...", "available": "1000000", ... }
+
+# 2. Reserve capacity for an invoice (EUR invoice on a USD program: converted with the stored rate)
+curl -s -X POST http://localhost:3000/programs/<programId>/reservations \
+  -H "$AUTH" -H "Content-Type: application/json" -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"invoiceId":"INV-001","amount":"10000","currency":"EUR"}'
+# -> { "reservationId": "...", "amountBase": "10865", "fxRate": "1.08650000", ... }
+
+# 3. Check availability
+curl -s -H "$AUTH" http://localhost:3000/programs/<programId>/availability
+# -> { "totalLimit": "1000000", "reserved": "10865", "available": "989135", ... }
+
+# 4. Release when the invoice is repaid (returns EXACTLY the amount held — no FX drift)
+curl -s -X POST http://localhost:3000/reservations/<reservationId>/release \
+  -H "$AUTH" -H "Idempotency-Key: $(uuidgen)"
 ```
 
-Tokens are validated for signature, expiry, issuer, and audience. Invalid or missing tokens receive `401`.
+| Endpoint | Auth | Notes |
+|---|---|---|
+| `GET /health` | public | liveness + Postgres ping |
+| `POST /programs` | JWT + Idempotency-Key | create a program |
+| `POST /programs/:id/reservations` | JWT + Idempotency-Key | atomic capacity check; `409` when full, `422` for unknown FX pair |
+| `POST /reservations/:id/release` | JWT + Idempotency-Key | `409` on double release |
+| `GET /programs/:id/availability` | JWT | total / reserved / available + applied treasury version |
 
-## Configuration
+## Kafka: treasury ingestion
 
-All config is loaded from environment variables and validated at boot with Joi. See `.env.example`.
-The app fails fast on startup if required values are missing or invalid.
+Topic `treasury.capacity.events` (poison messages go to `treasury.capacity.dlq`).
+Two message types, both version-gated per program (stale versions are ignored):
 
-| Variable | Purpose |
-|----------|---------|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `KAFKA_BROKERS` | Comma-separated broker list |
-| `JWT_*` | Bearer token signing and validation |
+```jsonc
+// Delta
+{ "type": "CAPACITY_DELTA", "programId": "<uuid>", "version": 7,
+  "delta": { "direction": "RESERVE", "amount": "50000", "currency": "USD" } }
 
-## Migrations
+// Full-state reconciliation snapshot (replaces totals, writes an adjustment ledger row)
+{ "type": "RECONCILIATION_SNAPSHOT", "programId": "<uuid>", "version": 8,
+  "snapshot": { "totalLimit": "2000000", "reserved": "120000", "baseCurrency": "USD" } }
+```
 
-TypeORM migrations live in `src/database/migrations/`. `synchronize` is disabled everywhere.
+Publish a test message from inside the Kafka container:
 
 ```bash
-npm run migration:run
-npm run migration:revert
+docker compose exec kafka /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 --topic treasury.capacity.events <<'EOF'
+{"type":"CAPACITY_DELTA","programId":"<programId>","version":1,"delta":{"direction":"RESERVE","amount":"50000","currency":"USD"}}
+EOF
 ```
+
+Watch it land in **Kafka UI → http://localhost:8080** (topics, messages, consumer group lag), then
+confirm via the availability endpoint.
 
 ## Tests
 
 ```bash
-npm test                      # unit tests
-docker compose up -d postgres # required for e2e DB health check
-npm run test:e2e
+npm test                       # unit: money & FX math, guard, message validation
+npm run test:integration       # real Postgres via Testcontainers (Docker must be running):
+                               #   - 20 parallel writers cannot oversubscribe (the core invariant)
+                               #   - idempotency replay/conflict, duplicate invoice
+                               #   - treasury dedupe, version gating, snapshots, poison messages
+                               #   - cross-currency conversion + exact-release
+docker compose up -d postgres  # e2e needs the compose Postgres
+npm run test:e2e               # full HTTP lifecycle through the real AppModule
 ```
 
-## Core invariants (see `.cursor/rules/` for the full spec)
+## Database
 
-1. Money is integer minor units + explicit currency. Never floats.
-2. Capacity reservation is atomic at the DB level — no oversubscription under concurrency.
-3. Every mutation (HTTP + Kafka) is idempotent, enforced by a unique constraint.
+Schema is created by migrations (`npm run migration:run`). Key tables:
+
+- `programs` — capacity + cached `reserved` total, `applied_version` for treasury gating. A CHECK
+  constraint makes oversubscription impossible even if app code regresses.
+- `reservations` — one lifecycle per invoice (`UNIQUE (program_id, invoice_id)`).
+- `capacity_ledger` — append-only (enforced by trigger); `SUM(amount_base) = programs.reserved` at all times.
+- `idempotency_keys` — processed HTTP requests + Kafka messages; the PK is the dedupe guarantee.
+- `fx_rates` — static seeded rates (see DECISIONS.md §6).
+
+Connect with any client at `postgres://pcs:pcs@localhost:5432/pcs` (DBeaver: new PostgreSQL
+connection, host `localhost`, port `5432`, db/user/password `pcs`).
+
+## Core invariants (the point of the exercise)
+
+1. Money is integer minor units (`bigint`) + explicit currency. Never floats — FX math is scaled bigint.
+2. Capacity reservation is atomic at the DB level (one conditional `UPDATE`) — no oversubscription under concurrency.
+3. Every mutation (HTTP + Kafka) is idempotent, enforced by unique constraints in the same transaction as the effect.
 4. Reconciliation snapshots are version-gated; stale/out-of-order ones are ignored.
-5. Multi-currency is explicit: convert-with-stored-rate OR reject.
-
-## Endpoints (planned — all authenticated except health)
-
-- `GET  /health` — liveness + Postgres ping (public)
-- `POST /programs/:id/reservations` — reserve capacity
-- `POST /reservations/:id/release` — release capacity
-- `GET  /programs/:id/availability` — current total / reserved / available
+5. Multi-currency is explicit: convert with a stored, persisted rate — or reject unknown pairs.
 
 ## Assumptions & trade-offs
 
-See `DECISIONS.md`.
-
-## Development
-
-Git workflow and commit conventions: `GIT_SETUP.md`. Detailed engineering rules: `.cursor/rules/`.
+Every decision point is recorded in `DECISIONS.md`. **Startup walkthrough:** `docs/STARTUP.md`.
+Git workflow: `GIT_SETUP.md`. Detailed engineering rules: `.cursor/rules/`.

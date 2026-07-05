@@ -19,6 +19,7 @@
     "migration:run": "typeorm-ts-node-commonjs migration:run -d src/database/data-source.ts",
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
     "token:dev": "node scripts/generate-dev-token.mjs",
+    "kafka:publish": "node scripts/publish-test-message.mjs",
     "prepare": "husky"
   },
   "dependencies": {

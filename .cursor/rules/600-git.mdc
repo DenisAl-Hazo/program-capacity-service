@@ -1,6 +1,6 @@
 ---
 description: Apply whenever committing, staging, writing commit messages, or setting up git hooks/branching.
-alwaysApply: false
+alwaysApply: true
 ---
 
 # Git workflow
@@ -20,6 +20,11 @@ alwaysApply: false
   ```
 - Do NOT author commits as the AI or any other identity. If you (the agent) run git commit,
   use exactly the configured identity above — never inject a Co-authored-by / AI trailer.
+- HARD RULE: every commit message must be free of ANY `Co-authored-by:` line. The IDE may
+  auto-inject one (Cursor Settings > Agent > Attribution controls it). After EVERY commit,
+  verify with `git log -1 --format=%B`; if a trailer slipped in, remove it (amend the just-created
+  unpushed commit, or create the commit via `git commit-tree` + `git update-ref` with the message
+  from a file). Run commitlint on the message manually when bypassing the commit-msg hook.
 
 ## Commit messages: Conventional Commits (enforced by commitlint)
 Format: `type(optional-scope): short imperative summary`
