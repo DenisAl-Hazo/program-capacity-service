@@ -7,6 +7,7 @@ import { CommonModule } from './common/common.module';
 import { IdempotencyModule } from './idempotency/idempotency.module';
 import { ProgramsModule } from './programs/programs.module';
 import { ReservationsModule } from './reservations/reservations.module';
+import { TreasuryModule } from './treasury/treasury.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { ReservationsModule } from './reservations/reservations.module';
     IdempotencyModule,
     ProgramsModule,
     ReservationsModule,
+    TreasuryModule,
   ],
 })
 export class AppModule {}

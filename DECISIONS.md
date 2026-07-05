@@ -58,6 +58,17 @@ compare-and-set under `FOR UPDATE`.
 Trade-off: relies on treasury providing a monotonic version. If only timestamps are available, use
 source timestamp with a documented tie-break.
 
+**Implemented (phase 4):** dedicated `kafkajs` consumer (not `@nestjs/microservices`) so offsets are
+committed manually AFTER the DB transaction commits — at-least-once delivery + idempotent processor
+= effectively-once application. Per message, in one transaction: dedupe insert (`ON CONFLICT DO
+NOTHING`) -> `FOR UPDATE` lock -> version gate -> effect + ledger + `applied_version` bump.
+Poison messages (bad schema, unknown program, capacity-impossible delta, self-inconsistent
+snapshot) go to the DLQ topic with a reason and are acked; transient failures are rethrown without
+committing the offset so Kafka redelivers. Treasury deltas must be in the program base currency
+until the FX phase. `version` is a JSON integer (< 2^53) — acceptable for a sequence number.
+If the broker is unreachable at boot in local dev, the HTTP API stays up and ingestion is disabled
+(compose ordering guarantees the broker in the packaged setup).
+
 ## 6. Multi-currency
 
 Decision: <choose> (a) reject reservations whose currency != program base currency, OR
@@ -79,3 +90,8 @@ validates signature, expiry, issuer, and audience. `GET /health` is `@Public()`.
 Decision: when a snapshot changes derived totals, record an append-only adjustment entry rather than
 rewriting history.
 Trade-off: preserves audit trail at the cost of an extra reconciliation entry to explain deltas.
+
+**Implemented (phase 4):** `applySnapshot` sets `total_limit`/`reserved` to the snapshot state and
+writes a `RECONCILIATION_ADJUSTMENT` ledger row for the reserved delta (skipped when zero), so
+`SUM(amount_base) == reserved` still holds after reconciliation. Every applied/skipped snapshot is
+logged with old/new state for auditability.

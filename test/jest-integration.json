@@ -1,5 +1,6 @@
 {
   "moduleFileExtensions": ["js", "json", "ts"],
+  "setupFiles": ["reflect-metadata"],
   "rootDir": ".",
   "testEnvironment": "node",
   "testRegex": ".integration-spec.ts$",
