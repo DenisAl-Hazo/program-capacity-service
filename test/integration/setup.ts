@@ -1,6 +1,8 @@
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { DataSource } from 'typeorm';
 import { InitialSchema1751710000000 } from '../../src/database/migrations/1751710000000-InitialSchema';
+import { AddFxRates1751720000000 } from '../../src/database/migrations/1751720000000-AddFxRates';
+import { FxRate } from '../../src/fx/fx-rate.entity';
 import { IdempotencyKey } from '../../src/idempotency/idempotency-key.entity';
 import { CapacityLedgerEntry } from '../../src/ledger/capacity-ledger-entry.entity';
 import { Program } from '../../src/programs/program.entity';
@@ -18,8 +20,8 @@ export async function startTestDatabase(): Promise<TestDatabase> {
   const dataSource = new DataSource({
     type: 'postgres',
     url: container.getConnectionUri(),
-    entities: [Program, Reservation, CapacityLedgerEntry, IdempotencyKey],
-    migrations: [InitialSchema1751710000000],
+    entities: [Program, Reservation, CapacityLedgerEntry, IdempotencyKey, FxRate],
+    migrations: [InitialSchema1751710000000, AddFxRates1751720000000],
     synchronize: false,
   });
   await dataSource.initialize();

@@ -1,13 +1,15 @@
 import { randomUUID } from 'crypto';
 import {
-  CurrencyMismatchError,
   DuplicateInvoiceError,
   IdempotencyConflictError,
   InsufficientCapacityError,
   ProgramNotFoundError,
   ReservationAlreadyReleasedError,
   ReservationNotFoundError,
+  UnsupportedCurrencyPairError,
 } from '../../src/common/errors/domain-error';
+import { FxRate } from '../../src/fx/fx-rate.entity';
+import { FxService } from '../../src/fx/fx.service';
 import { IdempotencyService } from '../../src/idempotency/idempotency.service';
 import { CapacityLedgerEntry } from '../../src/ledger/capacity-ledger-entry.entity';
 import { ProgramsService } from '../../src/programs/programs.service';
@@ -22,8 +24,9 @@ describe('Reservations (integration, real Postgres)', () => {
   beforeAll(async () => {
     db = await startTestDatabase();
     const idempotency = new IdempotencyService(db.dataSource);
+    const fx = new FxService(db.dataSource.getRepository(FxRate));
     programs = new ProgramsService(db.dataSource, idempotency);
-    reservations = new ReservationsService(db.dataSource, idempotency);
+    reservations = new ReservationsService(db.dataSource, idempotency, fx);
   }, 120_000);
 
   afterAll(async () => {
@@ -127,12 +130,13 @@ describe('Reservations (integration, real Postgres)', () => {
       expect(await ledgerSum(db.dataSource, programId)).toBe(0n);
     });
 
-    it('rejects a currency differing from the program base currency (pre-FX phase)', async () => {
+    it('rejects a currency with no seeded FX rate', async () => {
       const programId = await createProgram('1000', 'USD');
 
-      await expect(reserve(programId, '100', { currency: 'EUR' })).rejects.toBeInstanceOf(
-        CurrencyMismatchError,
+      await expect(reserve(programId, '100', { currency: 'JPY' })).rejects.toBeInstanceOf(
+        UnsupportedCurrencyPairError,
       );
+      expect(await reservedOf(db.dataSource, programId)).toBe(0n);
     });
 
     it('rejects reservations against an unknown program', async () => {
@@ -181,6 +185,42 @@ describe('Reservations (integration, real Postgres)', () => {
     it('release of an unknown reservation -> not found', async () => {
       await expect(reservations.release(randomUUID(), randomUUID())).rejects.toBeInstanceOf(
         ReservationNotFoundError,
+      );
+    });
+  });
+
+  describe('CROSS-CURRENCY (FX)', () => {
+    it('converts an EUR invoice on a USD program with the persisted rate (half-up)', async () => {
+      const programId = await createProgram('1000000', 'USD');
+
+      // 10000 EUR-cents * 1.0865 (seeded EUR->USD) = 10865 USD-cents
+      const reservation = await reserve(programId, '10000', { currency: 'EUR' });
+
+      expect(reservation.amount).toBe('10000');
+      expect(reservation.currency).toBe('EUR');
+      expect(reservation.amountBase).toBe('10865');
+      expect(reservation.fxRate).not.toBeNull();
+      expect(await reservedOf(db.dataSource, programId)).toBe(10865n);
+      expect(await ledgerSum(db.dataSource, programId)).toBe(10865n);
+    });
+
+    it('release returns EXACTLY the converted amount held at reservation time — no FX drift', async () => {
+      const programId = await createProgram('1000000', 'USD');
+      const reservation = await reserve(programId, '10000', { currency: 'EUR' });
+
+      const released = await reservations.release(reservation.reservationId, randomUUID());
+
+      expect(released.amountBase).toBe('10865');
+      expect(await reservedOf(db.dataSource, programId)).toBe(0n);
+      expect(await ledgerSum(db.dataSource, programId)).toBe(0n);
+    });
+
+    it('capacity check runs on the CONVERTED amount', async () => {
+      // Limit 10864 < converted 10865 -> must reject even though 10000 < 10864
+      const programId = await createProgram('10864', 'USD');
+
+      await expect(reserve(programId, '10000', { currency: 'EUR' })).rejects.toBeInstanceOf(
+        InsufficientCapacityError,
       );
     });
   });

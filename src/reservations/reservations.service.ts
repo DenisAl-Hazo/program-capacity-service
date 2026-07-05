@@ -3,7 +3,6 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { isUniqueViolation } from '../common/database/pg-errors';
 import {
-  CurrencyMismatchError,
   DuplicateInvoiceError,
   InsufficientCapacityError,
   ProgramNotFoundError,
@@ -11,6 +10,7 @@ import {
   ReservationNotFoundError,
 } from '../common/errors/domain-error';
 import { Money } from '../common/money/money';
+import { FxService } from '../fx/fx.service';
 import { IdempotencyService } from '../idempotency/idempotency.service';
 import { CapacityLedgerEntry } from '../ledger/capacity-ledger-entry.entity';
 import { Program } from '../programs/program.entity';
@@ -23,6 +23,7 @@ export class ReservationsService {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly idempotency: IdempotencyService,
+    private readonly fx: FxService,
   ) {}
 
   async reserve(
@@ -31,7 +32,11 @@ export class ReservationsService {
     idempotencyKey: string,
   ): Promise<ReservationResponse> {
     const requested = Money.fromString(dto.amount, dto.currency);
-    const requestHash = this.idempotency.computeRequestHash({ programId, ...dto });
+    // Must mirror IdempotencyInterceptor: route params + body.
+    const requestHash = this.idempotency.computeRequestHash({
+      params: { programId },
+      body: dto,
+    });
 
     try {
       return await this.dataSource.transaction(async (manager) => {
@@ -39,11 +44,9 @@ export class ReservationsService {
         if (!program) {
           throw new ProgramNotFoundError(programId);
         }
-        // Cross-currency conversion lands with the FX phase; until then reject explicitly.
-        if (requested.currency !== program.baseCurrency) {
-          throw new CurrencyMismatchError(program.baseCurrency, requested.currency);
-        }
-        const amountBase = requested.amount;
+        // Cross-currency: convert with the stored rate, persist the evidence (DECISIONS.md §6).
+        const conversion = await this.fx.convert(requested, program.baseCurrency);
+        const amountBase = conversion.amountBase;
 
         const reservationRepo = manager.getRepository(Reservation);
         const reservation = await reservationRepo.save(
@@ -53,8 +56,8 @@ export class ReservationsService {
             amount: requested.amount,
             currency: requested.currency,
             amountBase,
-            fxRate: null,
-            fxRateAsOf: null,
+            fxRate: conversion.fxRate,
+            fxRateAsOf: conversion.fxRateAsOf,
             status: 'RESERVED',
             releasedAt: null,
           }),
@@ -69,8 +72,8 @@ export class ReservationsService {
           amount: requested.amount,
           currency: requested.currency,
           amountBase,
-          fxRate: null,
-          fxRateAsOf: null,
+          fxRate: conversion.fxRate,
+          fxRateAsOf: conversion.fxRateAsOf,
           source: 'API',
           idempotencyKey,
         });
@@ -101,7 +104,11 @@ export class ReservationsService {
   }
 
   async release(reservationId: string, idempotencyKey: string): Promise<ReservationResponse> {
-    const requestHash = this.idempotency.computeRequestHash({ reservationId });
+    // Must mirror IdempotencyInterceptor: the route param is named `id`, body is empty.
+    const requestHash = this.idempotency.computeRequestHash({
+      params: { id: reservationId },
+      body: {},
+    });
 
     try {
       return await this.dataSource.transaction(async (manager) => {

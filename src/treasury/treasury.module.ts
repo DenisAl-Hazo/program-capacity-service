@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { FxModule } from '../fx/fx.module';
 import { CapacityLedgerEntry } from '../ledger/capacity-ledger-entry.entity';
 import { Program } from '../programs/program.entity';
 import { TreasuryConsumerService } from './treasury.consumer';
 import { TreasuryProcessor } from './treasury.processor';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Program, CapacityLedgerEntry])],
+  imports: [TypeOrmModule.forFeature([Program, CapacityLedgerEntry]), FxModule],
   providers: [TreasuryProcessor, TreasuryConsumerService],
   exports: [TreasuryProcessor],
 })

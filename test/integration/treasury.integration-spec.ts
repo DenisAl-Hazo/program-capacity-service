@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import { FxRate } from '../../src/fx/fx-rate.entity';
+import { FxService } from '../../src/fx/fx.service';
 import { IdempotencyService } from '../../src/idempotency/idempotency.service';
 import { CapacityLedgerEntry } from '../../src/ledger/capacity-ledger-entry.entity';
 import { ProgramsService } from '../../src/programs/programs.service';
@@ -17,7 +19,10 @@ describe('Treasury ingestion (integration, real Postgres)', () => {
 
   beforeAll(async () => {
     db = await startTestDatabase();
-    processor = new TreasuryProcessor(db.dataSource);
+    processor = new TreasuryProcessor(
+      db.dataSource,
+      new FxService(db.dataSource.getRepository(FxRate)),
+    );
     programs = new ProgramsService(db.dataSource, new IdempotencyService(db.dataSource));
   }, 120_000);
 
@@ -173,5 +178,28 @@ describe('Treasury ingestion (integration, real Postgres)', () => {
 
     expect(await reservedOf(db.dataSource, programId)).toBe(300n);
     expect(await ledgerSum(db.dataSource, programId)).toBe(300n);
+  });
+
+  it('cross-currency delta converts with the stored rate', async () => {
+    const programId = await createProgram('1000000');
+    const message = delta(programId, 1, '10000');
+    message.delta!.currency = 'EUR';
+
+    await processor.process(message, randomUUID());
+
+    // 10000 EUR-cents * 1.0865 = 10865 USD-cents
+    expect(await reservedOf(db.dataSource, programId)).toBe(10865n);
+    expect(await ledgerSum(db.dataSource, programId)).toBe(10865n);
+  });
+
+  it('poison: delta in a currency with no seeded rate', async () => {
+    const programId = await createProgram();
+    const message = delta(programId, 1, '100');
+    message.delta!.currency = 'JPY';
+
+    await expect(processor.process(message, randomUUID())).rejects.toBeInstanceOf(
+      PoisonMessageError,
+    );
+    expect(await reservedOf(db.dataSource, programId)).toBe(0n);
   });
 });

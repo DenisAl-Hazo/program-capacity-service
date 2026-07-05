@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
+import { UnsupportedCurrencyPairError } from '../common/errors/domain-error';
 import { Money } from '../common/money/money';
+import { FxService } from '../fx/fx.service';
 import { CapacityLedgerEntry } from '../ledger/capacity-ledger-entry.entity';
 import { Program } from '../programs/program.entity';
 import {
@@ -23,7 +25,10 @@ export type TreasuryOutcome = 'APPLIED' | 'DUPLICATE' | 'STALE';
 export class TreasuryProcessor {
   private readonly logger = new Logger(TreasuryProcessor.name);
 
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly fx: FxService,
+  ) {}
 
   async process(message: TreasuryMessageDto, idempotencyKey: string): Promise<TreasuryOutcome> {
     const outcome = await this.dataSource.transaction<TreasuryOutcome>(async (manager) => {
@@ -83,14 +88,20 @@ export class TreasuryProcessor {
     delta: TreasuryDeltaDto,
     idempotencyKey: string,
   ): Promise<void> {
-    // Cross-currency treasury deltas land with the FX phase; reject explicitly until then.
-    if (delta.currency !== program.baseCurrency) {
-      throw new PoisonMessageError(
-        `delta currency ${delta.currency} does not match program base ${program.baseCurrency}`,
-      );
-    }
     const amount = Money.fromString(delta.amount, delta.currency);
-    const signedDelta = delta.direction === 'RESERVE' ? amount.amount : -amount.amount;
+    // Cross-currency deltas convert with the stored rate; an unknown pair can never
+    // succeed, so it is poison rather than a transient failure.
+    let conversion;
+    try {
+      conversion = await this.fx.convert(amount, program.baseCurrency);
+    } catch (error) {
+      if (error instanceof UnsupportedCurrencyPairError) {
+        throw new PoisonMessageError(error.message);
+      }
+      throw error;
+    }
+    const signedDelta =
+      delta.direction === 'RESERVE' ? conversion.amountBase : -conversion.amountBase;
 
     const [rows] = await manager.query<[unknown[], number]>(
       `UPDATE programs
@@ -115,8 +126,8 @@ export class TreasuryProcessor {
       amount: amount.amount,
       currency: delta.currency,
       amountBase: signedDelta,
-      fxRate: null,
-      fxRateAsOf: null,
+      fxRate: conversion.fxRate,
+      fxRateAsOf: conversion.fxRateAsOf,
       source: 'TREASURY',
       idempotencyKey,
     });

@@ -51,3 +51,9 @@ export class IdempotencyConflictError extends DomainError {
     super('idempotency key was already used with a different request body');
   }
 }
+
+export class UnsupportedCurrencyPairError extends DomainError {
+  constructor(from: string, to: string) {
+    super(`no FX rate available for ${from} -> ${to}`);
+  }
+}

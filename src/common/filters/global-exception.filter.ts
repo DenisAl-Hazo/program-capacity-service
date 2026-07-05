@@ -17,6 +17,7 @@ import {
   ProgramNotFoundError,
   ReservationAlreadyReleasedError,
   ReservationNotFoundError,
+  UnsupportedCurrencyPairError,
 } from '../errors/domain-error';
 
 interface ErrorResponseBody {
@@ -97,7 +98,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     ) {
       return HttpStatus.CONFLICT;
     }
-    if (exception instanceof CurrencyMismatchError) {
+    if (
+      exception instanceof CurrencyMismatchError ||
+      exception instanceof UnsupportedCurrencyPairError
+    ) {
       return HttpStatus.UNPROCESSABLE_ENTITY;
     }
     if (exception instanceof InvalidMoneyError) {
