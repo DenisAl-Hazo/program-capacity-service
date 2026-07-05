@@ -1,3 +1,4 @@
+import { Controller, Get } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
@@ -12,6 +13,14 @@ import { appConfigFactory, envValidationSchema } from '../src/config/env.validat
 import { HealthController } from '../src/health/health.controller';
 import { JwtAuthGuard } from '../src/auth/jwt-auth.guard';
 import { JwtStrategy } from '../src/auth/jwt.strategy';
+
+@Controller('protected')
+class ProtectedStubController {
+  @Get()
+  getProtected(): { ok: true } {
+    return { ok: true };
+  }
+}
 
 describe('Health (e2e)', () => {
   let app: INestApplication<App>;
@@ -40,7 +49,7 @@ describe('Health (e2e)', () => {
         }),
         TerminusModule,
       ],
-      controllers: [HealthController],
+      controllers: [HealthController, ProtectedStubController],
       providers: [
         JwtStrategy,
         {
@@ -69,7 +78,7 @@ describe('Health (e2e)', () => {
     return request(app.getHttpServer()).get('/health').expect(200);
   });
 
-  it('GET /unknown returns 401 without a token', () => {
-    return request(app.getHttpServer()).get('/unknown-route').expect(401);
+  it('GET /protected returns 401 without a token', () => {
+    return request(app.getHttpServer()).get('/protected').expect(401);
   });
 });

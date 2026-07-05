@@ -35,7 +35,8 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const message =
       typeof exceptionResponse === 'string'
         ? exceptionResponse
-        : ((exceptionResponse as { message?: string | string[] }).message ?? 'Internal server error');
+        : ((exceptionResponse as { message?: string | string[] }).message ??
+          'Internal server error');
 
     const errorName =
       exception instanceof HttpException
@@ -44,7 +45,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           ? exception.name
           : 'Error';
 
-    if (statusCode >= HttpStatus.INTERNAL_SERVER_ERROR) {
+    if (statusCode >= 500) {
       this.logger.error(
         {
           correlationId: request.headers['x-correlation-id'],

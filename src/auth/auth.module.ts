@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import type { StringValue } from 'ms';
 import { AppConfig } from '../config/env.validation';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { JwtStrategy } from './jwt.strategy';
@@ -19,7 +20,7 @@ import { JwtStrategy } from './jwt.strategy';
           signOptions: {
             issuer: jwt.issuer,
             audience: jwt.audience,
-            expiresIn: jwt.expiresIn,
+            expiresIn: jwt.expiresIn as StringValue,
           },
         };
       },
