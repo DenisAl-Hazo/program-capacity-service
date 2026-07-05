@@ -3,7 +3,8 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+# --ignore-scripts: `prepare` runs husky (git hooks) — meaningless and broken inside an image.
+RUN npm ci --ignore-scripts
 
 COPY . .
 RUN npm run build
@@ -17,7 +18,7 @@ ENV NODE_ENV=production
 RUN apk add --no-cache wget
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 COPY --from=builder /app/dist ./dist
 
