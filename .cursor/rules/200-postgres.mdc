@@ -1,0 +1,64 @@
+---
+description: PostgreSQL schema, migration, money storage and concurrency rules.
+globs:
+  - "src/**/*.entity.ts"
+  - "src/**/*.repository.ts"
+  - "src/migrations/**/*.ts"
+  - "**/*.sql"
+alwaysApply: false
+---
+
+# PostgreSQL & persistence
+
+## Money columns
+- Amounts: `BIGINT` (minor units) — or `NUMERIC(38,0)` if values may exceed 2^53 minor units.
+- NEVER `float8`/`real`/`money` type. Currency: `CHAR(3)` (ISO 4217), `NOT NULL`, always beside its amount.
+- Add `CHECK (amount >= 0)` where the domain requires non-negative.
+
+## Core tables (guidance, adapt names)
+- `programs`: id, total_limit (bigint), base_currency, applied_version (bigint), created_at, updated_at.
+  - Reserved/available are DERIVED from the ledger; if you cache `reserved` on the row, it must only
+    ever change inside the same tx as the ledger insert, guarded by the atomic conditional update.
+- `capacity_ledger` (APPEND ONLY): id, program_id, invoice_id, direction (RESERVE|RELEASE),
+  amount (bigint), currency, fx_rate (nullable numeric), source (API|TREASURY),
+  idempotency_key (unique), created_at. No UPDATE, no DELETE — ever.
+- `reservations`: id, program_id, invoice_id, amount, currency, status (RESERVED|RELEASED),
+  version, timestamps.
+- `processed_messages`: idempotency_key PK, first_seen_at — dedupe for Kafka + HTTP.
+
+## The concurrency invariant (most important thing in the codebase)
+Reserving capacity must be safe under concurrent writers. Use ONE of:
+
+Option A — atomic conditional update (preferred, lock-free):
+```sql
+UPDATE programs
+   SET reserved = reserved + $amt, updated_at = now()
+ WHERE id = $programId
+   AND reserved + $amt <= total_limit;
+-- if rowCount = 0 -> InsufficientCapacity (or program missing); do NOT proceed.
+```
+Insert the ledger row in the SAME transaction.
+
+Option B — pessimistic lock:
+```sql
+SELECT total_limit, reserved FROM programs WHERE id = $programId FOR UPDATE;
+-- compute in app, verify, then UPDATE + ledger insert, all in one tx.
+```
+
+Never: SELECT available -> return to app -> later UPDATE in a separate tx. That races.
+
+## Migrations (TypeORM)
+- Use TypeORM migrations (`typeorm migration:generate` / `migration:run`). Real migration files committed.
+- `synchronize: false` ALWAYS — even locally rely on migrations so dev == the schema you ship.
+- Every schema change ships as a migration in the same commit.
+- Entities use explicit column types: `@Column({ type: 'bigint' })` for money (note: TypeORM returns
+  `bigint` as a string — keep it a string / convert to native `bigint`, never to `number`).
+- Use `@Column({ type: 'char', length: 3 })` for currency; `timestamptz` for all timestamps.
+- For the atomic capacity update, use the query builder or `manager.query(...)` with BOUND parameters —
+  do not rely on `save()` (that's a read-modify-write and races). Run it inside `dataSource.transaction`.
+- Unique constraint on `capacity_ledger.idempotency_key` and `processed_messages.idempotency_key`
+  is what actually enforces idempotency — the app check is an optimization, the constraint is the guarantee.
+
+## Reconciliation writes
+- Apply a snapshot only when `snapshot.version > programs.applied_version` (compare-and-set).
+- Wrap snapshot application in a transaction with `SELECT ... FOR UPDATE` on the program row.

@@ -1,0 +1,50 @@
+---
+description: Apply whenever committing, staging, writing commit messages, or setting up git hooks/branching.
+alwaysApply: false
+---
+
+# Git workflow
+
+## Branching
+- Single branch: `dev`. Commit directly to `dev`. No feature branches, no PR flow for now.
+- No CI/CD. Quality gates run LOCALLY via git hooks (Husky), not on a server.
+
+## Commit author identity (production commits)
+- All commits are authored as:
+  - `user.name`  = "<<<SET YOUR NAME>>>"          # e.g. Denys Al-Hazo
+  - `user.email` = "<<<SET YOUR EMAIL>>>"          # the email tied to your git host account
+- Set once per repo so it can't drift:
+  ```
+  git config user.name  "<<<SET YOUR NAME>>>"
+  git config user.email "<<<SET YOUR EMAIL>>>"
+  ```
+- Do NOT author commits as the AI or any other identity. If you (the agent) run git commit,
+  use exactly the configured identity above — never inject a Co-authored-by / AI trailer.
+
+## Commit messages: Conventional Commits (enforced by commitlint)
+Format: `type(optional-scope): short imperative summary`
+- Allowed types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `chore`, `build`, `style`, `ci`, `revert`.
+- Summary: imperative mood, lowercase, no trailing period, <= 72 chars.
+- Body (optional, wrap ~100 cols): what & why, not how. Reference decisions in DECISIONS.md when relevant.
+- Breaking change: `feat!: ...` or a `BREAKING CHANGE:` footer.
+
+Scopes for this project (use when it sharpens the message):
+`programs`, `reservations`, `ledger`, `treasury`, `fx`, `idempotency`, `auth`, `db`, `config`, `docker`.
+
+Good examples:
+- `feat(reservations): add atomic capacity reservation with FOR UPDATE guard`
+- `fix(treasury): reject reconciliation snapshots with stale version`
+- `test(reservations): add concurrent-oversubscription integration test`
+- `chore(db): add migration for capacity_ledger idempotency unique index`
+
+Bad (reject / rewrite): `update code`, `fixes`, `WIP`, `feat: Added Stuff.`
+
+## Commit hygiene
+- One logical change per commit. Migrations ship in the same commit as the code that needs them.
+- Never commit `.env`, secrets, `dist/`, `node_modules/`, coverage.
+- Do not commit failing code: hooks run lint + typecheck + affected tests before the commit lands.
+
+## Local hooks (Husky) — no CI, so these are the only gate
+- `pre-commit`: lint-staged -> eslint --fix + prettier on staged files, then `tsc --noEmit`.
+- `commit-msg`: commitlint against the Conventional Commits config.
+- (optional) `pre-push`: run the test suite before pushing to `dev`.

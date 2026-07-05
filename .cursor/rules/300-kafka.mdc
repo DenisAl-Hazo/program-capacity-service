@@ -1,0 +1,42 @@
+---
+description: Kafka treasury ingestion — ordering, idempotency, reconciliation, error handling.
+globs:
+  - "src/treasury/**/*.ts"
+  - "src/**/*.consumer.ts"
+  - "src/**/*.kafka.ts"
+alwaysApply: false
+---
+
+# Kafka treasury ingestion
+
+## Delivery semantics — assume the worst
+- At-least-once: every message can be redelivered. Handlers MUST be idempotent (see 200-postgres).
+- Ordering is guaranteed only within a partition. Key messages by `program_id` so all events for
+  one program land on one partition and stay ordered relative to each other.
+- Even so, a bulk reconciliation snapshot may be produced from a different pipeline and arrive
+  out of order vs incremental deltas. Do not trust arrival order — trust the version field.
+
+## Message types (expect at least)
+- Incremental delta: a reservation/release originating in treasury. Carries program_id, amount,
+  currency, direction, a version/sequence, and an idempotency key.
+- Reconciliation snapshot: a program's FULL current state (total_limit, reserved, currency, version).
+  Applying it must bring the program to exactly that state IF the snapshot is newer.
+
+## Processing rules
+1. Validate the payload with a schema (class-validator DTO or zod). Reject malformed messages to DLQ.
+2. Dedupe: check/insert idempotency key; if already processed, ack and skip.
+3. Version gate: load `programs.applied_version` under `FOR UPDATE`; if `msg.version <= applied_version`,
+   skip (stale) but still ack. Otherwise apply and set `applied_version = msg.version`.
+4. Apply effect + write ledger + advance version in ONE transaction. Commit, then ack.
+5. On transient failure (DB down): do NOT ack; let it redeliver. On poison/permanent failure
+   (bad schema, business-impossible): route to a dead-letter topic with the reason; ack the original.
+
+## Snapshot application
+- A snapshot overwrites derived totals; reconcile the ledger by recording an adjustment entry
+  (append-only) rather than mutating history. Document the reconciliation strategy in DECISIONS.md.
+- Log every snapshot applied vs skipped, with old/new version, for auditability.
+
+## Anti-patterns to refuse
+- Auto-commit offsets before the DB transaction commits (loses messages / breaks idempotency).
+- Processing without a version gate (snapshot clobbers newer state).
+- Blocking the consumer loop on long work without concurrency control / backpressure.

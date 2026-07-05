@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+.env
+.git
+.gitignore
+*.md
+.cursor
+.husky
+test
+**/*.spec.ts
+**/*.e2e-spec.ts

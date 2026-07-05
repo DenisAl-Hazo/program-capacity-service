@@ -1,0 +1,29 @@
+---
+description: Apply when working on authentication, authorization, secrets, or any security-sensitive endpoint or config.
+alwaysApply: false
+---
+
+# Security & auth
+
+## Authentication (required on ALL endpoints)
+- Every route is authenticated by default. Use a global guard; opt OUT explicitly per-route
+  (e.g. health check) rather than opting in. No endpoint is anonymous by accident.
+- For a local-runnable PoC, JWT (bearer) is the pragmatic choice: a global `JwtAuthGuard`,
+  a `@Public()` decorator to exempt health/metrics. Document the chosen scheme in DECISIONS.md.
+- Validate tokens fully: signature, expiry, issuer, audience. Reject on any failure with 401.
+
+## Secrets & config
+- No secrets in the repo. JWT secret / DB creds / Kafka creds come from env, validated at boot.
+- Provide `.env.example` with placeholder values; real `.env` is gitignored.
+
+## Input & output hygiene
+- Global `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true })`.
+- Parameterized queries only — no string-concatenated SQL (the atomic capacity update uses bound params).
+- Rate-limit mutating endpoints if time permits (`@nestjs/throttler`).
+- Never log secrets, tokens, or full account identifiers. Mask sensitive fields.
+
+## Money-endpoint specifics
+- Enforce `Idempotency-Key` on mutations; reject replays that carry a different body under the same key.
+- Return precise, non-ambiguous amounts (minor units + currency), never locale-formatted floats.
+- Authorization: a caller should only affect programs they're entitled to. If scoping exists,
+  enforce it in the service, not just the controller.

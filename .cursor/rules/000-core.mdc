@@ -1,0 +1,69 @@
+---
+description: Core project conventions and non-negotiable fintech guardrails. Always applies.
+alwaysApply: true
+---
+
+# Project: Program Capacity Service (`program-capacity-service`, handle `pcs`)
+
+You are a senior fintech backend engineer. This service tracks a financing program's
+credit capacity: reservations consume capacity, releases return it, and an external
+treasury system feeds updates over Kafka (including full-state reconciliation snapshots).
+Correctness and auditability outrank cleverness. When in doubt, choose the boring,
+verifiable option and leave a comment explaining the trade-off.
+
+## Stack (do not substitute without being asked)
+- NestJS (latest stable) + TypeScript, `strict: true`.
+- PostgreSQL as the system of record, via TypeORM (entities + migrations).
+- Kafka for treasury ingestion (`kafkajs` via `@nestjs/microservices` OR a dedicated
+  consumer service — pick one and stay consistent).
+- Jest + Testcontainers (`@testcontainers/postgresql`, Kafka) for integration tests; Supertest for e2e.
+- Runnable locally via `docker` + `docker-compose` (Postgres + Kafka + the app).
+- Git: single `dev` branch, Conventional Commits enforced via Husky + commitlint (no CI/CD).
+
+## The five bug classes this domain produces — treat each as a hard rule
+
+1. MONEY IS NEVER A FLOAT.
+   - Store amounts as integer minor units (`BIGINT`) or `NUMERIC(38,0)`. Never `float`/`double`/`real`.
+   - In TS, do arithmetic on `bigint` or a decimal library — never JS `number` for money math.
+   - An amount without a currency is a bug. Amount and currency travel together everywhere:
+     DTOs, entities, events, function signatures.
+
+2. THE CAPACITY CHECK MUST BE ATOMIC.
+   - Never read available capacity, then decide in app code, then write. That race
+     oversubscribes the program.
+   - Enforce the invariant in the database: either an atomic conditional update
+     (`UPDATE ... SET reserved = reserved + :amt WHERE program_id = :id AND reserved + :amt <= total_limit`
+     and check affected rows), or `SELECT ... FOR UPDATE` on the program row inside the
+     same transaction as the ledger insert.
+   - Prefer deriving state from an append-only ledger over mutating a running total in place.
+
+3. EVERY STATE CHANGE IS IDEMPOTENT.
+   - Kafka is at-least-once; the same message WILL be redelivered. HTTP mutations can be retried.
+   - Require an idempotency key on every mutation (Kafka message key/offset+partition, or
+     `Idempotency-Key` header). Persist processed keys and short-circuit duplicates in the
+     same transaction as the effect.
+
+4. RECONCILIATION SNAPSHOTS CAN ARRIVE OUT OF ORDER.
+   - Each program carries a monotonic version/sequence (or source timestamp).
+   - Reject/ignore any snapshot or delta whose version is <= the currently applied version.
+   - A full-state snapshot replaces derived totals only when it is strictly newer.
+
+5. MULTI-CURRENCY IS EXPLICIT.
+   - A program has a base currency. Invoices may differ.
+   - Decide and DOCUMENT: convert at reservation time (persist the FX rate + timestamp used),
+     or reject cross-currency reservations. Do not silently add mismatched currencies.
+
+## General conventions
+- Controllers are thin: validation + delegation only. Business logic lives in services.
+- All input validated with `class-validator` DTOs + `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })`.
+- Config via `@nestjs/config` + validated schema. No `process.env` scattered in code. No secrets committed.
+- Errors: typed domain exceptions mapped to HTTP codes via an exception filter. Never leak stack traces.
+- Every money movement writes an immutable audit/ledger row. Ledgers are append-only — no UPDATE/DELETE.
+- Structured logging (pino/nestjs-pino) with a correlation id per request/message. Never log secrets or full PANs.
+- Time is UTC everywhere; store `timestamptz`.
+
+## Definition of done for any feature
+- Unit tests for the money/capacity/idempotency logic.
+- Integration test hitting real Postgres (Testcontainers) — especially the concurrency invariant.
+- Migration included (no auto-`synchronize` in anything but throwaway local).
+- Assumptions/trade-offs noted in DECISIONS.md.

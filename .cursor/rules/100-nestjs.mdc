@@ -1,0 +1,48 @@
+---
+description: NestJS module structure, DTO, controller and REST conventions.
+globs:
+  - "src/**/*.controller.ts"
+  - "src/**/*.module.ts"
+  - "src/**/*.dto.ts"
+  - "src/**/*.service.ts"
+alwaysApply: false
+---
+
+# NestJS conventions
+
+## Module layout (feature-first)
+```
+src/
+  programs/        # program capacity aggregate: limit, reserved, available, base currency, version
+  reservations/    # reservation + release lifecycle, the atomic capacity operations
+  ledger/          # append-only capacity movements (source of truth for derived totals)
+  treasury/        # kafka consumer: deltas + reconciliation snapshots
+  fx/              # currency conversion (rate source + rounding policy)
+  idempotency/     # dedupe store + guard/interceptor
+  auth/            # authentication for all endpoints
+  common/          # money value object, decimal utils, filters, interceptors, correlation id
+  config/          # validated config schema
+```
+
+## Controllers
+- Thin. Validate via DTO, delegate to a service, map result to a response DTO. No DB access, no math.
+- Mutating endpoints require `Idempotency-Key` header (documented, enforced by guard).
+- Return explicit response DTOs — never leak entities.
+
+## DTOs
+- `class-validator` + `class-transformer`. Enable `whitelist` + `forbidNonWhitelisted` globally.
+- Money in requests: `{ amount: string /* minor units, integer */, currency: string /* ISO 4217 */ }`.
+  Accept amount as string to avoid JS number precision loss on the wire; validate it parses to a positive integer.
+- Never accept a raw float amount. Reject it in validation.
+
+## REST surface (suggested)
+- `POST /programs/:id/reservations`      -> create reservation (consumes capacity)
+- `POST /reservations/:id/release`       -> release (returns capacity)
+- `GET  /programs/:id/availability`      -> current total / reserved / available (+ currency, version)
+- All under an authenticated guard. No anonymous access to any route.
+
+## Services
+- Own the transaction boundary. One business operation = one DB transaction.
+- Inject a repository/data layer; do not build SQL strings inline except for the atomic capacity update.
+- Throw typed domain exceptions (e.g. `InsufficientCapacityError`, `CurrencyMismatchError`,
+  `StaleSnapshotError`, `DuplicateOperationError`).

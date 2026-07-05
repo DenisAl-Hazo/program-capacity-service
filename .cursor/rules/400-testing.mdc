@@ -1,0 +1,31 @@
+---
+description: Testing standards — unit, integration with Testcontainers, and the mandatory concurrency test.
+globs:
+  - "**/*.spec.ts"
+  - "**/*.e2e-spec.ts"
+  - "test/**/*.ts"
+alwaysApply: false
+---
+
+# Testing
+
+## Layers
+- Unit: money value object, FX conversion + rounding, version-gate logic, idempotency decision.
+  Pure, fast, no I/O.
+- Integration: real Postgres via Testcontainers (`@testcontainers/postgresql`). Run actual migrations.
+- Kafka flow: Testcontainers Kafka (or a fake consumer harness) for delta + snapshot + duplicate + stale.
+
+## Mandatory tests (do not mark a feature done without these)
+1. CONCURRENCY: fire N parallel reservations that together exceed the limit; assert total reserved
+   never exceeds `total_limit` and exactly the right number succeed. This proves the atomic invariant.
+2. IDEMPOTENCY: submit the same reservation twice (same key) -> exactly one ledger row, one effect.
+3. STALE SNAPSHOT: apply version 5, then deliver version 3 -> ignored, state unchanged.
+4. OUT-OF-ORDER: snapshot v10 after delta v8 applied -> snapshot wins; delta v8 replayed after -> ignored.
+5. CURRENCY MISMATCH: reserve in a currency differing from program base -> either converts with a
+   persisted rate, or rejects — matching the documented decision. Assert no silent mixed-currency sum.
+6. RELEASE: reserve then release -> available returns to original; double-release is idempotent/rejected.
+
+## Style
+- Arrange/Act/Assert, one behaviour per test, descriptive names.
+- No sleeps for concurrency — use `Promise.all` / barriers. Deterministic assertions only.
+- Money assertions on integer minor units, never on formatted strings.
