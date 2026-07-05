@@ -69,6 +69,19 @@ Production gaps, in priority order:
     (bearer auth + `Idempotency-Key` fields) doubles as the "simple UI" for manual exercise.
     Remaining nice-to-have: typed response schemas (response DTOs are interfaces, so only
     request bodies are fully schema'd today).
+11. **Caching (Redis).** Deliberately absent today — every read hits Postgres, which is correct
+    at this scale. Where a cache earns its place later, in order of safety:
+    - **FX rates** — near-static reference data; cache in Redis (or per-instance memory) with a
+      TTL matching the rate-refresh cadence. Safe: the rate used is persisted on the ledger row
+      anyway, so a stale cached rate is evidence-consistent, just older.
+    - **Availability reads** — cache `GET /programs/:id/availability` with a short TTL (1–5s)
+      or invalidate on write; huge win for polling dashboards/pricing engines (see §3 Idea C
+      for the full CDC read-model version).
+    - **Idempotency fast-path** — Redis lookup before the DB read in the interceptor. Only the
+      fast path: the guarantee must remain the Postgres PK in the effect's transaction.
+    - **Hard rule:** the reserve/release _write_ path must never consult a cache for the
+      capacity decision — the atomic conditional UPDATE against the authoritative row is the
+      whole correctness story. A cache that "knows" available capacity is how you oversubscribe.
 
 ---
 

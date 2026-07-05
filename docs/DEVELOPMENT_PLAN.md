@@ -1,7 +1,9 @@
 # Development Plan — Program Capacity & Invoice Reservation
 
-Status: PROPOSED (awaiting approval). Implementation follows this document phase by phase;
-each phase lands as one or more Conventional Commits on `dev` with migrations + tests included.
+Status: IMPLEMENTED. All phases below are complete and landed as Conventional Commits on `dev`
+(with migrations + tests). Decisions and their trade-offs are recorded in `DECISIONS.md`;
+post-submission ideas live in `docs/SCALING_AND_IMPROVEMENTS.md`. This document is kept as the
+original implementation plan for context.
 
 Scope guard: this is a proof of concept (PoC). We implement everything the task
 demands (correctness, atomicity, idempotency, reconciliation, multi-currency, auth, local run)

@@ -1,8 +1,8 @@
 # DECISIONS.md
 
-The task asks that assumptions and trade-offs be documented. Fill each of these in as you build.
-Below are the decision points that WILL come up — with the recommended default and the trade-off,
-so nothing is decided by accident.
+The task asks that assumptions and trade-offs be documented. Each section below is one decision
+point: the decision taken, the trade-off it carries, and an **Implemented** note describing what
+actually landed — so nothing was decided by accident.
 
 ## 1. Money representation
 
@@ -83,6 +83,7 @@ but needs a rate source and a defined rounding rule. We chose (b) because the ta
 MAY differ from the program currency — rejecting would fail the stated requirement.
 
 **Implemented (phase 5):**
+
 - `fx_rates` table seeded by migration with USD/EUR/GBP cross rates. A live rate feed is out of
   scope; the mechanics (persisted rate + `as_of` timestamp, deterministic rounding) are what matter.
   Unknown pairs are rejected: HTTP `422`, Kafka -> DLQ (an unknown pair can never succeed, so it is
