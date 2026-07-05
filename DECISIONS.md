@@ -32,11 +32,24 @@ Decision: atomic conditional `UPDATE ... WHERE reserved + :amt <= total_limit`, 
 Trade-off: lock-free and fast; requires the cached-total approach. `SELECT FOR UPDATE` is the
 alternative if we recompute from the ledger each time.
 
+**Implemented (phase 2):** `ReservationsService.applyCapacityDelta` — one bound-parameter UPDATE
+whose WHERE clause does the capacity check and the write in one statement; zero affected rows means
+`InsufficientCapacityError` and the whole transaction (reservation + ledger row) rolls back.
+Release uses the same statement with a negative delta plus `SELECT ... FOR UPDATE` on the
+reservation row so double releases serialize. Proven by the 20-parallel-writers integration test.
+
 ## 4. Idempotency
 
 Decision: unique constraint on `idempotency_key` in ledger + `processed_messages`; HTTP mutations
 require an `Idempotency-Key` header; Kafka uses message key or partition+offset.
 Trade-off: requires clients to send keys; we reject same-key-different-body replays as a conflict.
+
+**Implemented (phase 2):** `IdempotencyInterceptor` enforces the header and replays stored
+responses (fast path). The guarantee itself is the PK on `idempotency_keys` + the unique key on
+`capacity_ledger`, written in the same transaction as the effect. On any error the service checks
+whether the key was committed by a concurrent/previous attempt: same body -> replay stored
+response; different body -> 409. Request hash = SHA-256 of the JSON body (assumes clients send
+identical bodies for retries — reasonable for machine-generated retries).
 
 ## 5. Reconciliation / ordering
 

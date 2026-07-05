@@ -7,6 +7,17 @@ import {
   Logger,
 } from '@nestjs/common';
 import { Request, Response } from 'express';
+import {
+  CurrencyMismatchError,
+  DomainError,
+  DuplicateInvoiceError,
+  IdempotencyConflictError,
+  InsufficientCapacityError,
+  InvalidMoneyError,
+  ProgramNotFoundError,
+  ReservationAlreadyReleasedError,
+  ReservationNotFoundError,
+} from '../errors/domain-error';
 
 interface ErrorResponseBody {
   statusCode: number;
@@ -26,24 +37,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    const statusCode =
-      exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+    const { statusCode, message } = this.resolve(exception);
 
-    const exceptionResponse =
-      exception instanceof HttpException ? exception.getResponse() : 'Internal server error';
-
-    const message =
-      typeof exceptionResponse === 'string'
-        ? exceptionResponse
-        : ((exceptionResponse as { message?: string | string[] }).message ??
-          'Internal server error');
-
-    const errorName =
-      exception instanceof HttpException
-        ? exception.name
-        : exception instanceof Error
-          ? exception.name
-          : 'Error';
+    const errorName = exception instanceof Error ? exception.name : 'Error';
 
     if (statusCode >= 500) {
       this.logger.error(
@@ -66,5 +62,47 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     };
 
     response.status(statusCode).json(body);
+  }
+
+  private resolve(exception: unknown): { statusCode: number; message: string | string[] } {
+    if (exception instanceof HttpException) {
+      const exceptionResponse = exception.getResponse();
+      const message =
+        typeof exceptionResponse === 'string'
+          ? exceptionResponse
+          : ((exceptionResponse as { message?: string | string[] }).message ?? exception.message);
+      return { statusCode: exception.getStatus(), message };
+    }
+
+    if (exception instanceof DomainError) {
+      return { statusCode: this.domainStatus(exception), message: exception.message };
+    }
+
+    // Unknown error: generic message only — never leak internals to the client.
+    return { statusCode: HttpStatus.INTERNAL_SERVER_ERROR, message: 'Internal server error' };
+  }
+
+  private domainStatus(exception: DomainError): number {
+    if (
+      exception instanceof ProgramNotFoundError ||
+      exception instanceof ReservationNotFoundError
+    ) {
+      return HttpStatus.NOT_FOUND;
+    }
+    if (
+      exception instanceof InsufficientCapacityError ||
+      exception instanceof DuplicateInvoiceError ||
+      exception instanceof ReservationAlreadyReleasedError ||
+      exception instanceof IdempotencyConflictError
+    ) {
+      return HttpStatus.CONFLICT;
+    }
+    if (exception instanceof CurrencyMismatchError) {
+      return HttpStatus.UNPROCESSABLE_ENTITY;
+    }
+    if (exception instanceof InvalidMoneyError) {
+      return HttpStatus.BAD_REQUEST;
+    }
+    return HttpStatus.INTERNAL_SERVER_ERROR;
   }
 }
