@@ -43,20 +43,20 @@ atomic conditional update. DB constraints — not app code — enforce every inv
 
 **`capacity_ledger`** (APPEND-ONLY; UPDATE/DELETE blocked by a DB trigger)
 
-| column          | type                   | notes                                                       |
-| --------------- | ---------------------- | ----------------------------------------------------------- |
-| id              | uuid PK                |                                                             |
-| program_id      | uuid FK                |                                                             |
-| reservation_id  | uuid nullable          | link to reservation when applicable                         |
-| entry_type      | enum                   | RESERVE, RELEASE, TREASURY_DELTA, RECONCILIATION_ADJUSTMENT |
-| amount          | bigint                 | original amount, minor units, `CHECK (amount > 0)`          |
-| currency        | char(3)                | original currency                                           |
-| amount_base     | bigint                 | amount converted to program base currency                   |
-| fx_rate         | numeric(18,8) nullable | null when currency == base                                  |
-| fx_rate_as_of   | timestamptz nullable   | when the used rate was sourced                              |
-| source          | enum                   | API, TREASURY                                               |
-| idempotency_key | text **UNIQUE**        | the idempotency guarantee                                   |
-| created_at      | timestamptz            |                                                             |
+| column          | type                   | notes                                                                                                                 |
+| --------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| id              | uuid PK                |                                                                                                                       |
+| program_id      | uuid FK                |                                                                                                                       |
+| reservation_id  | uuid nullable          | link to reservation when applicable                                                                                   |
+| entry_type      | enum                   | RESERVE, RELEASE, RECONCILIATION_ADJUSTMENT (treasury deltas = RESERVE/RELEASE with source TREASURY)                  |
+| amount          | bigint                 | original amount, minor units, `CHECK (amount > 0)`                                                                    |
+| currency        | char(3)                | original currency                                                                                                     |
+| amount_base     | bigint                 | SIGNED delta applied to `reserved` in base currency; sign tied to entry_type by CHECK; `SUM(amount_base) == reserved` |
+| fx_rate         | numeric(18,8) nullable | null when currency == base                                                                                            |
+| fx_rate_as_of   | timestamptz nullable   | when the used rate was sourced                                                                                        |
+| source          | enum                   | API, TREASURY                                                                                                         |
+| idempotency_key | text **UNIQUE**        | the idempotency guarantee                                                                                             |
+| created_at      | timestamptz            |                                                                                                                       |
 
 **`reservations`**
 
