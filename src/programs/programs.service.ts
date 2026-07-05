@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
+import { ProgramNotFoundError } from '../common/errors/domain-error';
 import { Money } from '../common/money/money';
 import { IdempotencyService } from '../idempotency/idempotency.service';
+import { AvailabilityResponse, toAvailabilityResponse } from './dto/availability-response.dto';
 import { CreateProgramDto } from './dto/create-program.dto';
 import { ProgramResponse, toProgramResponse } from './dto/program-response.dto';
 import { Program } from './program.entity';
@@ -50,5 +52,13 @@ export class ProgramsService {
       }
       throw error;
     }
+  }
+
+  async getAvailability(programId: string): Promise<AvailabilityResponse> {
+    const program = await this.dataSource.getRepository(Program).findOneBy({ id: programId });
+    if (!program) {
+      throw new ProgramNotFoundError(programId);
+    }
+    return toAvailabilityResponse(program);
   }
 }

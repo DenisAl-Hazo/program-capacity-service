@@ -1,6 +1,17 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, UseInterceptors } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  UseInterceptors,
+} from '@nestjs/common';
 import { IdempotencyKeyParam } from '../idempotency/idempotency-key.decorator';
 import { IdempotencyInterceptor } from '../idempotency/idempotency.interceptor';
+import { AvailabilityResponse } from './dto/availability-response.dto';
 import { CreateProgramDto } from './dto/create-program.dto';
 import { ProgramResponse } from './dto/program-response.dto';
 import { ProgramsService } from './programs.service';
@@ -17,5 +28,10 @@ export class ProgramsController {
     @IdempotencyKeyParam() idempotencyKey: string,
   ): Promise<ProgramResponse> {
     return this.programsService.create(dto, idempotencyKey);
+  }
+
+  @Get(':id/availability')
+  availability(@Param('id', ParseUUIDPipe) programId: string): Promise<AvailabilityResponse> {
+    return this.programsService.getAvailability(programId);
   }
 }

@@ -184,4 +184,33 @@ describe('Reservations (integration, real Postgres)', () => {
       );
     });
   });
+
+  describe('AVAILABILITY', () => {
+    it('reports total / reserved / available consistently through the lifecycle', async () => {
+      const programId = await createProgram('1000');
+
+      let availability = await programs.getAvailability(programId);
+      expect(availability).toMatchObject({
+        programId,
+        baseCurrency: 'USD',
+        totalLimit: '1000',
+        reserved: '0',
+        available: '1000',
+      });
+
+      const reservation = await reserve(programId, '300');
+      availability = await programs.getAvailability(programId);
+      expect(availability).toMatchObject({ reserved: '300', available: '700' });
+
+      await reservations.release(reservation.reservationId, randomUUID());
+      availability = await programs.getAvailability(programId);
+      expect(availability).toMatchObject({ reserved: '0', available: '1000' });
+    });
+
+    it('unknown program -> not found', async () => {
+      await expect(programs.getAvailability(randomUUID())).rejects.toBeInstanceOf(
+        ProgramNotFoundError,
+      );
+    });
+  });
 });
