@@ -9,18 +9,18 @@ Package: `program-capacity-service` · handle: `pcs`
 
 ## Tech stack — what and why
 
-| Instrument | Role | Why this one |
-|---|---|---|
-| **NestJS** (strict TypeScript) | HTTP framework, DI container | Modular architecture (guards, pipes, interceptors, filters, middleware) maps 1:1 onto the cross-cutting concerns this service needs: auth, validation, idempotency, error mapping, correlation ids |
-| **PostgreSQL 16** | System of record | ACID transactions carry the core invariant: the capacity check and the ledger write commit atomically or not at all. CHECK constraints, unique indexes and a trigger enforce the rules even against buggy app code |
-| **TypeORM** | Entities + migrations | Schema is versioned in `src/database/migrations/` (`synchronize` is off everywhere); raw SQL is used deliberately where precision matters (atomic conditional UPDATE, `ON CONFLICT` dedupe) |
-| **Kafka** (`kafkajs`, dedicated consumer) | Treasury ingestion | A hand-rolled consumer (not `@nestjs/microservices`) so offsets are committed manually **after** the DB transaction — at-least-once delivery + idempotent processor = effectively-once application |
-| **Passport + JWT** | AuthN | Global `JwtAuthGuard` via `APP_GUARD`; `@Public()` opt-out for `/health`. Validates signature, expiry, issuer, audience |
-| **Joi** (`@nestjs/config`) | Config validation | The app fails fast at boot on missing/invalid env vars instead of failing at 3am on the first request |
-| **nestjs-pino** | Structured logging | JSON logs with a correlation id per request; `Authorization` header redacted |
-| **Jest + Testcontainers** | Tests | Unit tests for money/FX math; integration tests against **real Postgres** (the concurrency test is the whole point); e2e over HTTP with Supertest |
-| **Docker Compose** | Local runtime | One command brings up Postgres, Kafka (KRaft, no ZooKeeper), Kafka UI, and the app |
-| **Husky + commitlint** | Git hygiene | Conventional Commits enforced on a single `dev` branch |
+| Instrument                                | Role                         | Why this one                                                                                                                                                                                                       |
+| ----------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **NestJS** (strict TypeScript)            | HTTP framework, DI container | Modular architecture (guards, pipes, interceptors, filters, middleware) maps 1:1 onto the cross-cutting concerns this service needs: auth, validation, idempotency, error mapping, correlation ids                 |
+| **PostgreSQL 16**                         | System of record             | ACID transactions carry the core invariant: the capacity check and the ledger write commit atomically or not at all. CHECK constraints, unique indexes and a trigger enforce the rules even against buggy app code |
+| **TypeORM**                               | Entities + migrations        | Schema is versioned in `src/database/migrations/` (`synchronize` is off everywhere); raw SQL is used deliberately where precision matters (atomic conditional UPDATE, `ON CONFLICT` dedupe)                        |
+| **Kafka** (`kafkajs`, dedicated consumer) | Treasury ingestion           | A hand-rolled consumer (not `@nestjs/microservices`) so offsets are committed manually **after** the DB transaction — at-least-once delivery + idempotent processor = effectively-once application                 |
+| **Passport + JWT**                        | AuthN                        | Global `JwtAuthGuard` via `APP_GUARD`; `@Public()` opt-out for `/health`. Validates signature, expiry, issuer, audience                                                                                            |
+| **Joi** (`@nestjs/config`)                | Config validation            | The app fails fast at boot on missing/invalid env vars instead of failing at 3am on the first request                                                                                                              |
+| **nestjs-pino**                           | Structured logging           | JSON logs with a correlation id per request; `Authorization` header redacted                                                                                                                                       |
+| **Jest + Testcontainers**                 | Tests                        | Unit tests for money/FX math; integration tests against **real Postgres** (the concurrency test is the whole point); e2e over HTTP with Supertest                                                                  |
+| **Docker Compose**                        | Local runtime                | One command brings up Postgres, Kafka (KRaft, no ZooKeeper), Kafka UI, and the app                                                                                                                                 |
+| **Husky + commitlint**                    | Git hygiene                  | Conventional Commits enforced on a single `dev` branch                                                                                                                                                             |
 
 ### NestJS building blocks used (where to look)
 
@@ -41,7 +41,8 @@ npm run migration:run
 npm run start:dev                              # app on http://localhost:3000
 ```
 
-Or run everything (app included) in Docker:
+Or run everything (app included) in Docker — migrations are applied automatically before the
+app starts, so a clean database works out of the box:
 
 ```bash
 cp .env.example .env
@@ -49,6 +50,7 @@ docker compose up --build
 ```
 
 Health (no auth): `GET http://localhost:3000/health`
+Swagger UI (interactive API console): http://localhost:3000/docs
 Kafka UI (topics, messages, consumer lag): http://localhost:8080
 
 ## Authentication
@@ -66,6 +68,10 @@ Invalid/missing tokens receive `401`. See DECISIONS.md §7 for the trade-off (HS
 
 All mutations require an `Idempotency-Key` header (any unique string ≤ 255 chars; retries must
 resend the same key + body). Amounts are **strings of integer minor units** (cents), never JSON numbers.
+
+Prefer a UI? **Swagger UI at http://localhost:3000/docs** documents every route and can drive the
+whole lifecycle from the browser (click _Authorize_ and paste the token from `npm run token:dev`;
+each mutation form has an `Idempotency-Key` field).
 
 ```bash
 TOKEN=$(npm run token:dev --silent)
@@ -92,13 +98,13 @@ curl -s -X POST http://localhost:3000/reservations/<reservationId>/release \
   -H "$AUTH" -H "Idempotency-Key: $(uuidgen)"
 ```
 
-| Endpoint | Auth | Notes |
-|---|---|---|
-| `GET /health` | public | liveness + Postgres ping |
-| `POST /programs` | JWT + Idempotency-Key | create a program |
+| Endpoint                          | Auth                  | Notes                                                             |
+| --------------------------------- | --------------------- | ----------------------------------------------------------------- |
+| `GET /health`                     | public                | liveness + Postgres ping                                          |
+| `POST /programs`                  | JWT + Idempotency-Key | create a program                                                  |
 | `POST /programs/:id/reservations` | JWT + Idempotency-Key | atomic capacity check; `409` when full, `422` for unknown FX pair |
-| `POST /reservations/:id/release` | JWT + Idempotency-Key | `409` on double release |
-| `GET /programs/:id/availability` | JWT | total / reserved / available + applied treasury version |
+| `POST /reservations/:id/release`  | JWT + Idempotency-Key | `409` on double release                                           |
+| `GET /programs/:id/availability`  | JWT                   | total / reserved / available + applied treasury version           |
 
 ## Kafka: treasury ingestion
 
@@ -142,7 +148,9 @@ npm run test:e2e               # full HTTP lifecycle through the real AppModule
 
 ## Database
 
-Schema is created by migrations (`npm run migration:run`). Key tables:
+Schema is created by migrations. Outside Docker they are an explicit step (`npm run migration:run`);
+the Docker image runs any pending migrations automatically before starting the app (see the
+`Dockerfile` CMD), so `docker compose up --build` works against a clean volume. Key tables:
 
 - `programs` — capacity + cached `reserved` total, `applied_version` for treasury gating. A CHECK
   constraint makes oversubscription impossible even if app code regresses.

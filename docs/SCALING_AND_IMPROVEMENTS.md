@@ -36,10 +36,11 @@ Production gaps, in priority order:
 
 ## 2. Future improvements (non-security)
 
-1. **Migrations at deploy time.** `migrationsRun: false` is deliberate, but the packaged
-   `docker compose up --build` path never applies migrations — a clean-DB boot serves 500s on
-   first use. Add a migration step (init container / entrypoint gate / release pipeline stage)
-   so "runs locally via Docker Compose" holds on a fresh volume.
+1. **Migrations at deploy time.** ✅ _Done:_ the Docker image now runs pending migrations before
+   starting the app (`Dockerfile` CMD), so `docker compose up --build` works on a clean volume.
+   Outside Docker, migrations stay an explicit step (`npm run migration:run`). In a multi-replica
+   deployment, move the migration step to a dedicated release-pipeline stage / init job so only
+   one runner applies it (TypeORM takes a lock, but a pipeline stage is cleaner).
 2. **Live FX rates.** `fx_rates` is a seeded static table. Real system: rate ingestion job with
    `as_of` history (append-only rate table, pick latest ≤ now), staleness alarm, and a maximum
    rate age policy per program. The persisted-evidence mechanics already in place stay unchanged.
@@ -64,8 +65,10 @@ Production gaps, in priority order:
    and catches manual-SQL accidents).
 9. **Node version pinning.** Add `.nvmrc` + `engines` (Node ≥ 20) — the repo currently fails on
    older default Node with a cryptic Jest syntax error.
-10. **OpenAPI spec.** `@nestjs/swagger` on the four routes — cheap, and doubles as the "simple UI"
-    for manual exercise (Swagger UI can drive the whole lifecycle, including headers).
+10. **OpenAPI spec.** ✅ _Done:_ `@nestjs/swagger` with the CLI plugin; Swagger UI at `/docs`
+    (bearer auth + `Idempotency-Key` fields) doubles as the "simple UI" for manual exercise.
+    Remaining nice-to-have: typed response schemas (response DTOs are interfaces, so only
+    request bodies are fully schema'd today).
 
 ---
 

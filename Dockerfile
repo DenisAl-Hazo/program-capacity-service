@@ -23,4 +23,7 @@ COPY --from=builder /app/dist ./dist
 
 EXPOSE 3000
 
-CMD ["node", "dist/main.js"]
+# Apply pending migrations before serving traffic: a clean database must be usable
+# with `docker compose up --build` alone. Outside Docker, migrations stay an explicit
+# step (`npm run migration:run`) — see DECISIONS.md.
+CMD ["sh", "-c", "node node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js && node dist/main.js"]
