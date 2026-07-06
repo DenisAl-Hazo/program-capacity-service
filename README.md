@@ -7,6 +7,50 @@ different currencies. All endpoints are authenticated. Runs locally via Docker C
 
 Package: `program-capacity-service` · handle: `pcs`
 
+## TL;DR
+
+One service, five endpoints, one Kafka topic. What it guarantees:
+
+- **Integer money** — amounts are `bigint` minor units (cents) end-to-end; strings on the wire; FX
+  is pure scaled-bigint math with documented half-up rounding. No floats, ever.
+- **No oversubscription** — the capacity check and the write are a single conditional `UPDATE`;
+  proven by a 20-parallel-writers test. A DB CHECK constraint backstops even future app bugs.
+- **Idempotent everything** — HTTP mutations (`Idempotency-Key` header: replay same request,
+  409 on key reuse) and Kafka messages (dedupe + version gate) — enforced by unique constraints
+  committed in the same transaction as the effect.
+- **Multi-currency** — invoices convert at reservation time with a persisted rate + timestamp;
+  release returns exactly what was held (no FX drift); unknown pairs rejected (422 / DLQ).
+- **Treasury reconciliation** — deltas and full-state snapshots over Kafka, version-gated,
+  applied effectively-once (manual offset commit after the DB transaction), poison → DLQ.
+- **Audit trail** — append-only `capacity_ledger` (trigger-enforced); `SUM(amount_base)` always
+  equals the cached `reserved`.
+- **Authenticated** — global JWT guard (deny-by-default), `/health` is the only public route.
+
+**Try it in 2 minutes:** `docker compose up --build` → open [Swagger UI](http://localhost:3000/docs)
+→ authorize with `npm run token:dev` → drive the whole lifecycle from the browser.
+
+### Documentation map
+
+| Document                                                             | TL;DR                                                                                                                                                        |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [DECISIONS.md](DECISIONS.md)                                         | Every design decision with its trade-off and what actually landed — money representation, concurrency, idempotency, reconciliation ordering, FX policy, auth |
+| [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md)               | Annotated repo map: every folder/file, what it does, and the exact order a request travels through the NestJS pipeline                                       |
+| [docs/STARTUP.md](docs/STARTUP.md)                                   | Step-by-step local guide: setup, migrations, JWT, exercising the API, Kafka publishing, DBeaver, troubleshooting                                             |
+| [docs/SCALING_AND_IMPROVEMENTS.md](docs/SCALING_AND_IMPROVEMENTS.md) | What's deliberately out of scope and how it would be built: security hardening, live FX, caching, partitioning/sharding, CQRS reads                          |
+| [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)                 | The original phase-by-phase implementation plan (kept for context; status: implemented)                                                                      |
+
+### Table of contents
+
+- [Tech stack — what and why](#tech-stack--what-and-why)
+- [Quick start](#quick-start)
+- [Authentication](#authentication)
+- [API walkthrough](#api-walkthrough)
+- [Kafka: treasury ingestion](#kafka-treasury-ingestion)
+- [Tests](#tests)
+- [Database](#database)
+- [Core invariants](#core-invariants-the-point-of-the-exercise)
+- [Assumptions & trade-offs](#assumptions--trade-offs)
+
 ## Tech stack — what and why
 
 | Instrument                                | Role                         | Why this one                                                                                                                                                                                                       |
@@ -172,5 +216,7 @@ connection, host `localhost`, port `5432`, db/user/password `pcs`).
 
 ## Assumptions & trade-offs
 
-Every decision point is recorded in `DECISIONS.md`. **Startup walkthrough:** `docs/STARTUP.md`.
-Git workflow: `GIT_SETUP.md`. Detailed engineering rules: `.cursor/rules/`.
+Every decision point is recorded in [DECISIONS.md](DECISIONS.md) — see the
+[documentation map](#documentation-map) at the top for the full set of docs.
+Git workflow: Conventional Commits on `dev`, enforced by Husky + commitlint.
+Detailed engineering rules: `.cursor/rules/`.
