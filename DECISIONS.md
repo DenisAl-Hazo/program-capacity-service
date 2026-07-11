@@ -110,6 +110,21 @@ validates signature, expiry, issuer, and audience. `GET /health` is `@Public()`.
 OAuth2/OIDC (Auth0, Keycloak) or a refresh-token rotation endpoint; the UI calls refresh on 401
 (expiry only) and redirects to login on refresh failure. See `docs/STARTUP.md` §5.
 
+## 7b. CORS
+
+Decision: no CORS configuration (`app.enableCors()` is never called).
+Trade-off: this API has no browser-facing client in scope — every consumer described in the task
+(Swagger, curl, backend/treasury systems) calls over HTTP with a bearer token, and CORS is a
+browser-only enforcement mechanism that server-to-server calls never trigger. `cors` appears in
+`package-lock.json` only as a transitive dependency of `@nestjs/platform-express` (Express bundles
+it so `enableCors()` works if called) — it is not configured or relied on anywhere in this codebase.
+
+**If a browser-based client (dashboard, admin UI) were added later:** enable CORS with an explicit
+origin allowlist (`app.enableCors({ origin: [...], credentials: true })`), never a wildcard —
+especially here, since a wide-open origin policy would let any website script authenticated calls
+from a victim's browser if a token were stolen. Absence of CORS config today is the safer default,
+not a gap.
+
 ## 8. Snapshot vs ledger reconciliation
 
 Decision: when a snapshot changes derived totals, record an append-only adjustment entry rather than
