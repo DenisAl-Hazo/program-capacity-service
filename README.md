@@ -37,6 +37,8 @@ One service, five endpoints, one Kafka topic. What it guarantees:
 | [docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md)               | Annotated repo map: every folder/file, what it does, and the exact order a request travels through the NestJS pipeline                                       |
 | [docs/STARTUP.md](docs/STARTUP.md)                                   | Step-by-step local guide: setup, migrations, JWT, exercising the API, Kafka publishing, DBeaver, troubleshooting                                             |
 | [docs/SCALING_AND_IMPROVEMENTS.md](docs/SCALING_AND_IMPROVEMENTS.md) | What's deliberately out of scope and how it would be built: security hardening, live FX, caching, partitioning/sharding, CQRS reads                          |
+| [docs/BOTTLENECKS.md](docs/BOTTLENECKS.md)                           | Where the throughput ceiling actually is today: hot-program row locks, single-node Kafka, unbounded ledger growth, and an unkeyed-message ordering risk      |
+| [docs/DEMO_WALKTHROUGH.md](docs/DEMO_WALKTHROUGH.md)                 | A linear, copy-pasteable script proving every feature works via Swagger UI + Kafka UI alone — no terminal required                                           |
 | [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)                 | The original phase-by-phase implementation plan (kept for context; status: implemented)                                                                      |
 
 ### Table of contents
